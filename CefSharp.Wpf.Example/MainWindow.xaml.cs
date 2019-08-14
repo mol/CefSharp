@@ -4,6 +4,8 @@
 
 using System;
 using System.Collections.ObjectModel;
+using System.Threading;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Input;
 using CefSharp.Example;
@@ -75,6 +77,21 @@ namespace CefSharp.Wpf.Example
         private void MainWindowLoaded(object sender, RoutedEventArgs e)
         {
             CreateNewTab(CefExample.DefaultUrl, true);
+
+            // Reproduce the hack introduced here: https://github.com/cefsharp/CefSharp/commit/0d67b05513c2f716db8151d763eaf021de993e4f
+            CreateNewTab();
+            Task.Run(() =>
+            {
+                try
+                {
+                    while(true)
+                    {
+                        Dispatcher.Invoke(new Action(() => TabControl.SelectedIndex = TabControl.SelectedIndex < TabControl.Items.Count - 1 ? TabControl.SelectedIndex + 1 : 0));
+                        Thread.Sleep(25);
+                    }
+                }
+                catch (TaskCanceledException) { } // So it doesn't break in VS on shut down
+            });
         }
 
         private void CreateNewTab(string url = DefaultUrlForAddedTabs, bool showSideBar = false)
