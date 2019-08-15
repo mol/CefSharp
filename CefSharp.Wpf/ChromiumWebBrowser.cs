@@ -3,6 +3,7 @@
 // Use of this source code is governed by a BSD-style license that can be found in the LICENSE file.
 
 using System;
+using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
@@ -136,6 +137,8 @@ namespace CefSharp.Wpf
 
         private bool resizeHackForIssue2779Enabled;
         private CefSharp.Structs.Size? resizeHackForIssue2779Size;
+        private readonly CancellationTokenSource resizeHackForIssue2779CancelSource = new CancellationTokenSource();
+        private readonly BlockingCollection<Func<Task>> resizeHackForIssue2779PropagationQueue = new BlockingCollection<Func<Task>>();
 
         /// <summary>
         /// The value for disposal, if it's 1 (one) then this instance is either disposed
@@ -526,6 +529,9 @@ namespace CefSharp.Wpf
         {
             EnableResizeHackForIssue2779 = true;
 
+            // Start thread to propagate size and visibility changes to the browser host in an ordered fashion
+            new Thread(StartResizeHackForIssue2779PropagationQueueConsumer) { IsBackground = true }.Start();
+
             //Initialize CEF if it hasn't already been initialized
             if (!Cef.IsInitialized)
             {
@@ -645,6 +651,8 @@ namespace CefSharp.Wpf
         {
             if (disposing)
             {
+                resizeHackForIssue2779CancelSource.Cancel();
+
                 Interlocked.Exchange(ref browserInitialized, 0);
 
                 UiThreadRunAsync(() =>
@@ -1767,10 +1775,15 @@ namespace CefSharp.Wpf
                 {
                     if (previousWindowState == WindowState.Minimized)
                     {
-                        if (browser != null)
+                        resizeHackForIssue2779PropagationQueue.Add(() =>
                         {
-                            browser.GetHost().WasHidden(false);
-                        }
+                            if (browser != null)
+                            {
+                                browser.GetHost().WasHidden(false);
+                            }
+
+                            return Task.Delay(0);
+                        });
 
                         ResizeHackFor2779();
                     }
@@ -1779,15 +1792,20 @@ namespace CefSharp.Wpf
                 }
                 case WindowState.Minimized:
                 {
-                    if (EnableResizeHackForIssue2779)
+                    resizeHackForIssue2779PropagationQueue.Add(() =>
                     {
-                        resizeHackForIssue2779Enabled = true;
-                    }
+                        if (EnableResizeHackForIssue2779)
+                        {
+                            resizeHackForIssue2779Enabled = true;
+                        }
 
-                    if (browser != null)
-                    {
-                        browser.GetHost().WasHidden(true);
-                    }
+                        if (browser != null)
+                        {
+                            browser.GetHost().WasHidden(true);
+                        }
+
+                        return Task.Delay(0);
+                    });
                     break;
                 }
             }
@@ -1907,18 +1925,23 @@ namespace CefSharp.Wpf
         /// <param name="e">The <see cref="SizeChangedEventArgs"/> instance containing the event data.</param>
         private void OnActualSizeChanged(object sender, SizeChangedEventArgs e)
         {
-            // Initialize RenderClientAdapter when WPF has calculated the actual size of current content.
-            CreateOffscreenBrowser(e.NewSize);
-
-            //NOTE: Previous we used Math.Ceiling to round the sizing up, we
-            //now set UseLayoutRounding = true; on the control so the sizes are
-            //already rounded to a whole number for us.
-            viewRect = new Rect(0, 0, (int)e.NewSize.Width, (int)e.NewSize.Height);
-
-            if (browser != null)
+            resizeHackForIssue2779PropagationQueue.Add(() =>
             {
-                browser.GetHost().WasResized();
-            }
+                // Initialize RenderClientAdapter when WPF has calculated the actual size of current content.
+                CreateOffscreenBrowser(e.NewSize);
+
+                //NOTE: Previous we used Math.Ceiling to round the sizing up, we
+                //now set UseLayoutRounding = true; on the control so the sizes are
+                //already rounded to a whole number for us.
+                viewRect = new Rect(0, 0, (int)e.NewSize.Width, (int)e.NewSize.Height);
+
+                if (browser != null)
+                {
+                    browser.GetHost().WasResized();
+                }
+
+                return Task.Delay(0);
+            });
         }
 
         /// <summary>
@@ -1932,31 +1955,45 @@ namespace CefSharp.Wpf
 
             if (browser != null)
             {
-                var host = browser.GetHost();
-                host.WasHidden(!isVisible);
+                resizeHackForIssue2779PropagationQueue.Add(() =>
+                {
+                    browser?.GetHost().WasHidden(!isVisible);
+
+                    return Task.Delay(0);
+                });
 
                 if (isVisible)
                 {
                     ResizeHackFor2779();
 
-                    //Fix for #1778 - When browser becomes visible we update the zoom level
-                    //browsers of the same origin will share the same zoomlevel and
-                    //we need to track the update, so our ZoomLevelProperty works
-                    //properly
-                    host.GetZoomLevelAsync().ContinueWith(t =>
+                    resizeHackForIssue2779PropagationQueue.Add(() =>
                     {
-                        if (!IsDisposed)
+                        //Fix for #1778 - When browser becomes visible we update the zoom level
+                        //browsers of the same origin will share the same zoomlevel and
+                        //we need to track the update, so our ZoomLevelProperty works
+                        //properly
+                        browser?.GetHost().GetZoomLevelAsync().ContinueWith(t =>
                         {
-                            SetCurrentValue(ZoomLevelProperty, t.Result);
-                        }
-                    },
-                    CancellationToken.None,
-                    TaskContinuationOptions.OnlyOnRanToCompletion,
-                    TaskScheduler.FromCurrentSynchronizationContext());
+                            if (browser != null && !IsDisposed)
+                            {
+                                SetCurrentValue(ZoomLevelProperty, t.Result);
+                            }
+                        },
+                        CancellationToken.None,
+                        TaskContinuationOptions.OnlyOnRanToCompletion,
+                        TaskScheduler.FromCurrentSynchronizationContext());
+
+                        return Task.Delay(0);
+                    });
                 }
                 else if (EnableResizeHackForIssue2779)
                 {
-                    resizeHackForIssue2779Enabled = true;
+                    resizeHackForIssue2779PropagationQueue.Add(() =>
+                    {
+                        resizeHackForIssue2779Enabled = true;
+
+                        return Task.Delay(0);
+                    });
                 }
             }
         }
@@ -2409,37 +2446,60 @@ namespace CefSharp.Wpf
             return Interlocked.CompareExchange(ref browserInitialized, 0, 0) == 1;
         }
 
+        private async void StartResizeHackForIssue2779PropagationQueueConsumer(object state)
+        {
+            try
+            {
+                while (true)
+                {
+                    var action = resizeHackForIssue2779PropagationQueue.Take(resizeHackForIssue2779CancelSource.Token);
+                    await Dispatcher.Invoke(action);
+                }
+            }
+            catch (OperationCanceledException)
+            {
+
+            }
+        }
+
         private void ResizeHackFor2779()
         {
             if (EnableResizeHackForIssue2779)
             {
                 const int delayInMs = 50;
 
-                Task.Run(async () =>
+                resizeHackForIssue2779PropagationQueue.Add(async () =>
                 {
-                    await Task.Delay(delayInMs);
-
-                    if (browser != null)
+                    try
                     {
-                        resizeHackForIssue2779Size = new Structs.Size(viewRect.Width - 1, viewRect.Height - 1);
-                        browser.GetHost().WasResized();
+                        await Task.Delay(delayInMs, resizeHackForIssue2779CancelSource.Token);
+
+                        if (browser != null)
+                        {
+                            resizeHackForIssue2779Size = new Structs.Size(viewRect.Width - 1, viewRect.Height - 1);
+                            browser.GetHost().WasResized();
+                        }
+
+                        await Task.Delay(delayInMs, resizeHackForIssue2779CancelSource.Token);
+
+                        if (browser != null)
+                        {
+                            resizeHackForIssue2779Size = null;
+                            browser.GetHost().WasResized();
+                        }
+
+                        await Task.Delay(delayInMs, resizeHackForIssue2779CancelSource.Token);
+
+                        if (browser != null)
+                        {
+                            resizeHackForIssue2779Enabled = false;
+
+                            browser.GetHost().Invalidate(PaintElementType.View);
+                        }
                     }
-
-                    await Task.Delay(delayInMs);
-
-                    if (browser != null)
+                    catch (TaskCanceledException)
                     {
-                        resizeHackForIssue2779Size = null;
-                        browser.GetHost().WasResized();
-                    }
 
-                    await Task.Delay(delayInMs);
-
-                    if (browser != null)
-                    {
-                        resizeHackForIssue2779Enabled = false;
-
-                        browser.GetHost().Invalidate(PaintElementType.View);
                     }
                 });
             }
