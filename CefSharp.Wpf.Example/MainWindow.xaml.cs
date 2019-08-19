@@ -3,9 +3,11 @@
 // Use of this source code is governed by a BSD-style license that can be found in the LICENSE file.
 
 using System;
+using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Windows;
 using System.Windows.Input;
+using System.Windows.Threading;
 using CefSharp.Example;
 using CefSharp.Wpf.Example.Controls;
 using CefSharp.Wpf.Example.ViewModels;
@@ -65,6 +67,14 @@ namespace CefSharp.Wpf.Example
             }
         }
 
+        private void CloseTab(BrowserTabViewModel browserViewModel)
+        {
+            if (BrowserTabs.Remove(browserViewModel))
+            {
+                browserViewModel.WebBrowser?.Dispose();
+            }
+        }
+
         private void OpenNewTab(object sender, ExecutedRoutedEventArgs e)
         {
             CreateNewTab();
@@ -75,6 +85,10 @@ namespace CefSharp.Wpf.Example
         private void MainWindowLoaded(object sender, RoutedEventArgs e)
         {
             CreateNewTab(CefExample.DefaultUrl, true);
+
+            // Reproduce the hack introduced here: https://github.com/cefsharp/CefSharp/commit/0d67b05513c2f716db8151d763eaf021de993e4f
+            CreateNewTab();
+            CreateNewTab();
         }
 
         private void CreateNewTab(string url = DefaultUrlForAddedTabs, bool showSideBar = false)
@@ -137,7 +151,12 @@ namespace CefSharp.Wpf.Example
 
                 if (param == "ToggleDownloadInfo")
                 {
-                    browserViewModel.ShowDownloadInfo = !browserViewModel.ShowDownloadInfo;
+                    //browserViewModel.ShowDownloadInfo = !browserViewModel.ShowDownloadInfo;
+
+                    DispatcherTimer timer = new DispatcherTimer();
+                    timer.Interval = TimeSpan.FromMilliseconds(50);
+                    timer.Tick += Timer_Tick;
+                    timer.Start();
                 }
 
                 if (param == "AsyncJsbTaskTests")
@@ -155,6 +174,39 @@ namespace CefSharp.Wpf.Example
                 //{
                 //    browserViewModel.LoadCustomRequestExample();
                 //}
+            }
+        }
+
+        private int count;
+        private Random random = new Random();
+
+        private void Timer_Tick(object sender, EventArgs e)
+        {
+            if (count++ < 100)
+            {
+                WindowState = WindowState.Normal;
+                Width = Width > 500 ? Width - 5 : 1000;
+                Height = Height > 500 ? Height - 5 : 1000;
+
+                // Get all indexes but the selected one
+                var indexes = new List<int>();
+                for (int i = 0; i < TabControl.Items.Count; i++)
+                {
+                    if (TabControl.SelectedIndex != i)
+                    {
+                        indexes.Add(i);
+                    }
+                }
+
+                // Select a random unselected tab
+                TabControl.SelectedIndex = indexes[random.Next(0, indexes.Count)];
+
+                // Close a tab and create a tab once in a while
+                if (random.Next(0, 5) == 0)
+                {
+                    CloseTab(BrowserTabs[Math.Max(1, TabControl.SelectedIndex)]); // Don't close the first tab
+                    CreateNewTab();
+                }
             }
         }
 
