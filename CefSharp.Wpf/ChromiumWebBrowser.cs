@@ -1767,7 +1767,7 @@ namespace CefSharp.Wpf
                 {
                     if (previousWindowState == WindowState.Minimized)
                     {
-                        CefUiThreadRunAsync(() =>
+                        CefUiThreadRun(() =>
                         {
                             if (browser != null)
                             {
@@ -1787,7 +1787,7 @@ namespace CefSharp.Wpf
                         resizeHackForIssue2779Enabled = true;
                     }
 
-                    CefUiThreadRunAsync(() =>
+                    CefUiThreadRun(() =>
                     {
                         if (browser != null)
                         {
@@ -1889,7 +1889,7 @@ namespace CefSharp.Wpf
             }
         }
 
-        internal void CefUiThreadRunAsync(Action action)
+        internal void CefUiThreadRun(Action action)
         {
             if (!IsDisposed && InternalIsBrowserInitialized())
             {
@@ -1899,10 +1899,11 @@ namespace CefSharp.Wpf
                 }
                 else
                 {
+                    // We need to run it synchronously to avoid the Chromium crash in RenderWidgetHostImpl::SynchronizeVisualProperties
                     Cef.UIThreadTaskFactory.StartNew(delegate
                     {
                         action();
-                    });
+                    }).Wait();
                 }
             }
         }
@@ -1939,7 +1940,7 @@ namespace CefSharp.Wpf
             //already rounded to a whole number for us.
             viewRect = new Rect(0, 0, (int)e.NewSize.Width, (int)e.NewSize.Height);
 
-            CefUiThreadRunAsync(() =>
+            CefUiThreadRun(() =>
             {
                 if (browser != null)
                 {
@@ -1959,7 +1960,7 @@ namespace CefSharp.Wpf
 
             if (browser != null)
             {
-                CefUiThreadRunAsync(() =>
+                CefUiThreadRun(() =>
                 {
                     if (browser != null)
                     {
@@ -2448,7 +2449,7 @@ namespace CefSharp.Wpf
             {
                 const int delayInMs = 50;
 
-                CefUiThreadRunAsync(async () =>
+                CefUiThreadRun(async () =>
                 {
                     if (browser != null)
                     {
