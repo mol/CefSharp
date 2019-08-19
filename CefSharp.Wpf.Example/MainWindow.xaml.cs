@@ -5,6 +5,8 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.Threading;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Input;
 using System.Windows.Threading;
@@ -86,9 +88,11 @@ namespace CefSharp.Wpf.Example
         {
             CreateNewTab(CefExample.DefaultUrl, true);
 
-            // Reproduce the hack introduced here: https://github.com/cefsharp/CefSharp/commit/0d67b05513c2f716db8151d763eaf021de993e4f
+            // Reproduce the crash caused by WasResized and RenderWidgetHostImpl::SynchronizeVisualProperties.
+            // See comments: https://github.com/cefsharp/CefSharp/issues/2779
             CreateNewTab();
             CreateNewTab();
+            //ReproduceWasResizedCrashAsync();
         }
 
         private void CreateNewTab(string url = DefaultUrlForAddedTabs, bool showSideBar = false)
@@ -153,10 +157,7 @@ namespace CefSharp.Wpf.Example
                 {
                     //browserViewModel.ShowDownloadInfo = !browserViewModel.ShowDownloadInfo;
 
-                    DispatcherTimer timer = new DispatcherTimer();
-                    timer.Interval = TimeSpan.FromMilliseconds(50);
-                    timer.Tick += Timer_Tick;
-                    timer.Start();
+                    ReproduceWasResizedCrashAsync();
                 }
 
                 if (param == "AsyncJsbTaskTests")
@@ -177,37 +178,58 @@ namespace CefSharp.Wpf.Example
             }
         }
 
-        private int count;
-        private Random random = new Random();
-
-        private void Timer_Tick(object sender, EventArgs e)
+        private void ReproduceWasResizedCrashAsync()
         {
-            if (count++ < 100)
+            Task.Run(() =>
             {
-                WindowState = WindowState.Normal;
-                Width = Width > 500 ? Width - 5 : 1000;
-                Height = Height > 500 ? Height - 5 : 1000;
+                var random = new Random();
 
-                // Get all indexes but the selected one
-                var indexes = new List<int>();
-                for (int i = 0; i < TabControl.Items.Count; i++)
+                for (int i = 0; i < 4; i++)
                 {
-                    if (TabControl.SelectedIndex != i)
+                    for (int j = 0; j < 150; j++)
                     {
-                        indexes.Add(i);
+                        Dispatcher.Invoke(new Action(() =>
+                        {
+                            WindowState = WindowState.Normal;
+                            var newWidth = Width + (i % 2 == 0 ? -5 : 5);
+                            var newHeight = Height + (i % 2 == 0 ? -5 : 5);
+                            if (newWidth < 500 || newWidth > 1500)
+                            {
+                                newWidth = 1000;
+                            }
+                            if (newHeight < 500 || newHeight > 1500)
+                            {
+                                newHeight = 1000;
+                            }
+                            Width = newWidth;
+                            Height = newHeight;
+
+                            // Get all indexes but the selected one
+                            var indexes = new List<int>();
+                            for (int k = 0; k < TabControl.Items.Count; k++)
+                            {
+                                if (TabControl.SelectedIndex != k)
+                                {
+                                    indexes.Add(k);
+                                }
+                            }
+
+                            // Select a random unselected tab
+                            TabControl.SelectedIndex = indexes[random.Next(0, indexes.Count)];
+
+                            // Close a tab and create a tab once in a while
+                            if (random.Next(0, 5) == 0)
+                            {
+                                CloseTab(BrowserTabs[Math.Max(1, TabControl.SelectedIndex)]); // Don't close the first tab
+                                CreateNewTab();
+                            }
+                        }));
+
+                        // Sleep random amount of time
+                        Thread.Sleep(random.Next(1, 31));
                     }
                 }
-
-                // Select a random unselected tab
-                TabControl.SelectedIndex = indexes[random.Next(0, indexes.Count)];
-
-                // Close a tab and create a tab once in a while
-                if (random.Next(0, 5) == 0)
-                {
-                    CloseTab(BrowserTabs[Math.Max(1, TabControl.SelectedIndex)]); // Don't close the first tab
-                    CreateNewTab();
-                }
-            }
+            });
         }
 
         private async void PrintToPdfCommandBinding(object sender, ExecutedRoutedEventArgs e)
